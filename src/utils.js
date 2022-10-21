@@ -294,5 +294,6 @@ module.exports = {
   submitTx,
   constructSerializedTx,
   getPolkadotApi,
+  getKeyPair,
   methods,
 };

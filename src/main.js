@@ -1,46 +1,62 @@
 const onchain = require('./onchain');
 const offchain = require('./offchain');
-const { submitTx } = require('./utils');
+const { submitTx, getKeyPair } = require('./utils');
 
-(async () => {
+const main = async () => {
+  // Private key of the primary key of the identity you wish to join.
+  const primaryPrivateKey = '0x6d7cf82b7b91ae55fc5b16aa43788889fb3efb872662078202fdb2394a35c200';
+  // Private key of the secondary key joining the identity.
+  const secondaryPrivateKey = '0x18b2d6a2d3139afef52ef3a05e8ced63f5d6ac8e6606ad63be7e482fe6434a4f';
 
-  // See subkey inspect "//Eve"
-  let evePrivateKey = '0x786ad0e2df456fe43dd1f91ebca22e235bc162e0bb8d53c633e8c85b2af68b7a';
-  // See subkey inspect "//Foo"
-  let bobAddress = '5CQ46C1Xn9sLo9WmJFc4bEyAp9KRrudRieRXAQRqazhDWjMT';
+  const { address: primaryAddress } = await getKeyPair(primaryPrivateKey);
+  const { address: secondaryAddress } = await getKeyPair(secondaryPrivateKey);
+  console.log(`Attempting to join secondary key :`, secondaryAddress);
+  console.log(`To the identity of primary key :`, primaryAddress);
 
-  let data = await onchain.getIdentityStatus(bobAddress);
+  const primaryIdStatus = await onchain.getIdentityStatus(primaryAddress);
 
-  if (!data.did) { // Register DID
-    const registerTx = await offchain.registerIdentity(
-      evePrivateKey,
-      bobAddress
-    );
-    
-    await submitTx(registerTx);
+  if (!primaryIdStatus.did || !primaryIdStatus.hasCddClaim || !primaryIdStatus.isPrimaryKey) {
+    console.log('The provided primary key is not a valid primary key');
+    return;
   }
 
-  const { did } = await onchain.getIdentityStatus(bobAddress);
-  
-  if (did) {
-    const cddTx = await offchain.addCddClaim(evePrivateKey, did);
+  let secondaryIdStatus = await onchain.getIdentityStatus(secondaryAddress);
 
-    await submitTx(cddTx);
-
-    // double check status (the function logs the results)
-    await onchain.getIdentityStatus(bobAddress);
-  } else {
-    throw ("DID Not Registered Correctly");
+  if (secondaryIdStatus.did) {
+    console.log('Secondary key is already attached to an identity');
+    return;
   }
 
-  await onchain.getPendingAuthorizations(bobAddress);
+  const addSecondaryKeyTx = await offchain.addSecondaryKey(primaryPrivateKey, secondaryAddress);
 
-  const transferTx = await offchain.transferWithMemo(
-    evePrivateKey,
-    bobAddress,
-    "10000000", // this will transfer 10 POLYX
-    "INITIAL TRANSFER" // message length max is 32 chars
-  );
-  await submitTx(transferTx);
+  await submitTx(addSecondaryKeyTx);
 
-})().catch(err => console.error(err));
+  const pendingAuths = await onchain.getPendingAuthorizations(secondaryAddress);
+  if (pendingAuths.length === 0) {
+    console.log('No pending authorizations of type JoinIdentity');
+    return;
+  }
+
+  // Sort so we only approve the most recent authorization.
+  pendingAuths.sort((a, b) => a - b);
+
+  const joinIdentityTx = await offchain.joinIdentity(secondaryPrivateKey, pendingAuths[pendingAuths.length - 1]);
+
+  await submitTx(joinIdentityTx);
+
+  // Confirm secondary key now is associated with the primary key's identity
+  secondaryIdStatus = await onchain.getIdentityStatus(secondaryAddress);
+  if (!secondaryIdStatus.did) {
+    console.log('Secondary key failed to join the primary key');
+    return;
+  }
+  if (secondaryIdStatus.did.toString() != primaryIdStatus.did.toString()) {
+    console.log('!!!ATTENTION: Secondary key has joined the incorrect identity!!!');
+    return;
+  }
+  console.log('***SECONDARY KEY ADDED SUCCESSFULLY***');
+};
+
+main()
+  .catch(console.error)
+  .finally(() => process.exit());
