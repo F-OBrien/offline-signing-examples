@@ -275,6 +275,7 @@ async function listenForInclusion(extrinsicHash) {
       } else if (new Date() - timeWas > timeoutMs) {
         // Timeout
         console.log('Timed out after', new Date() - timeWas, 'ms');
+        unsub && unsub();
         clearInterval(wait);
         reject('The transaction hash was not found on chain before the timeout expired');
       }
